@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -57,6 +58,7 @@ func main() {
 	mask := flag.String("mask", "[REDACTED]", "Text to replace redactions with")
 	namesFile := flag.String("names-file", "", "Optional file with names to redact (one per line)")
 	reportPath := flag.String("report", "", "Optional path for JSON report (default: <output>/redaction-report.json)")
+	reportCSVPath := flag.String("report-csv", "", "Optional path for CSV report")
 	var customRegex stringList
 	flag.Var(&customRegex, "custom-regex", "Custom regex to redact (repeatable)")
 	flag.Parse()
@@ -148,6 +150,12 @@ func main() {
 	}
 	if err := writeReport(*reportPath, rep); err != nil {
 		exitWith("failed to write report: " + err.Error())
+	}
+
+	if *reportCSVPath != "" {
+		if err := writeCSVReport(*reportCSVPath, rep); err != nil {
+			exitWith("failed to write CSV report: " + err.Error())
+		}
 	}
 
 	printSummary(rep, *reportPath)
@@ -297,6 +305,42 @@ func writeReport(path string, rep report) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+func writeCSVReport(path string, rep report) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+
+	labels := make([]string, 0, len(rep.ByPattern))
+	for label := range rep.ByPattern {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	header := append([]string{"source", "target", "total_redactions"}, labels...)
+	if err := writer.Write(header); err != nil {
+		return err
+	}
+
+	for _, entry := range rep.Details {
+		row := []string{entry.Source, entry.Target, fmt.Sprintf("%d", entry.Total)}
+		for _, label := range labels {
+			row = append(row, fmt.Sprintf("%d", entry.Redactions[label]))
+		}
+		if err := writer.Write(row); err != nil {
+			return err
+		}
+	}
+	writer.Flush()
+	return writer.Error()
 }
 
 func printSummary(rep report, reportPath string) {

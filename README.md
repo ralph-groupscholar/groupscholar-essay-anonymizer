@@ -23,6 +23,10 @@ go run . -input /path/to/essays -output /path/to/redacted -extensions .txt,.md -
 go run . -input /path/to/essays -custom-regex "\\b\d{6}\\b" -custom-regex "Student ID: \\d+"
 ```
 
+```bash
+go run . -input /path/to/essays -report-csv /path/to/redaction-report.csv
+```
+
 ## Flags
 - `-input`: File or directory to redact (required).
 - `-output`: Output directory for redacted files (default: `./redacted`).
@@ -31,10 +35,12 @@ go run . -input /path/to/essays -custom-regex "\\b\d{6}\\b" -custom-regex "Stude
 - `-names-file`: File containing names to redact (one per line).
 - `-custom-regex`: Repeatable custom regex patterns.
 - `-report`: Optional path for the JSON report.
+- `-report-csv`: Optional path for a CSV report.
 
 ## Output
 - Redacted files are written to the output directory, preserving relative paths.
 - JSON report includes per-file counts and totals.
+- CSV report includes per-file counts, totals, and per-pattern columns.
 
 ## Tech
 - Go 1.22
