@@ -8,3 +8,4 @@
 ## 2026-02-08
 - Added optional CSV reporting with per-file and per-pattern counts.
 - Updated documentation with CSV report usage and output details.
+- Added mask template support for labeled redactions with sequential IDs.

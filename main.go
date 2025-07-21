@@ -56,6 +56,7 @@ func main() {
 	outputPath := flag.String("output", "", "Output directory for redacted files (default: ./redacted)")
 	extensions := flag.String("extensions", ".txt,.md,.csv", "Comma-separated list of file extensions to include when input is a directory")
 	mask := flag.String("mask", "[REDACTED]", "Text to replace redactions with")
+	maskTemplate := flag.String("mask-template", "", "Template for redactions using {label} and {n} placeholders")
 	namesFile := flag.String("names-file", "", "Optional file with names to redact (one per line)")
 	reportPath := flag.String("report", "", "Optional path for JSON report (default: <output>/redaction-report.json)")
 	reportCSVPath := flag.String("report-csv", "", "Optional path for CSV report")
@@ -129,7 +130,7 @@ func main() {
 	}
 
 	for _, path := range files {
-		entry, err := redactFile(path, absInput, outDir, patterns, *mask)
+		entry, err := redactFile(path, absInput, outDir, patterns, *mask, *maskTemplate)
 		if err != nil {
 			exitWith(fmt.Sprintf("failed to redact %s: %v", path, err))
 		}
@@ -251,7 +252,7 @@ func collectFiles(root string, allowedExt map[string]bool) ([]string, error) {
 	return files, nil
 }
 
-func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask string) (fileReport, error) {
+func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask string, maskTemplate string) (fileReport, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fileReport{}, err
@@ -259,7 +260,17 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask str
 
 	content := string(data)
 	redactions := map[string]int{}
+	maskTemplate = strings.TrimSpace(maskTemplate)
 	for _, pat := range patterns {
+		if maskTemplate != "" {
+			counter := 0
+			content = pat.re.ReplaceAllStringFunc(content, func(_ string) string {
+				counter++
+				redactions[pat.label]++
+				return applyMaskTemplate(maskTemplate, pat.label, counter)
+			})
+			continue
+		}
 		matches := pat.re.FindAllStringIndex(content, -1)
 		if len(matches) == 0 {
 			continue
@@ -294,6 +305,11 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask str
 		Redactions: redactions,
 		Total:      total,
 	}, nil
+}
+
+func applyMaskTemplate(template, label string, index int) string {
+	out := strings.ReplaceAll(template, "{label}", label)
+	return strings.ReplaceAll(out, "{n}", fmt.Sprintf("%d", index))
 }
 
 func writeReport(path string, rep report) error {

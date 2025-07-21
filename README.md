@@ -27,11 +27,16 @@ go run . -input /path/to/essays -custom-regex "\\b\d{6}\\b" -custom-regex "Stude
 go run . -input /path/to/essays -report-csv /path/to/redaction-report.csv
 ```
 
+```bash
+go run . -input /path/to/essays -mask-template "[REDACTED:{label}:{n}]"
+```
+
 ## Flags
 - `-input`: File or directory to redact (required).
 - `-output`: Output directory for redacted files (default: `./redacted`).
 - `-extensions`: Comma-separated extensions when input is a directory.
 - `-mask`: Replacement string for redacted content.
+- `-mask-template`: Template for redactions using `{label}` and `{n}` placeholders.
 - `-names-file`: File containing names to redact (one per line).
 - `-custom-regex`: Repeatable custom regex patterns.
 - `-report`: Optional path for the JSON report.
