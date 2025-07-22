@@ -1,9 +1,9 @@
 # GroupScholar Essay Anonymizer
 
-Local-first CLI that redacts PII in scholarship essays and intake narratives before review. It supports email, phone, SSN, DOB, street address detection, optional name lists, and custom regex patterns.
+Local-first CLI that redacts PII in scholarship essays and intake narratives before review. It supports email, phone, SSN, DOB, street address detection, plus URL, IP address, and credit card detection (with Luhn validation), optional name lists, and custom regex patterns.
 
 ## Features
-- Redacts emails, phone numbers, SSNs, DOBs, and street addresses by default.
+- Redacts emails, phone numbers, SSNs, DOBs, street addresses, URLs, IP addresses, and credit card numbers by default.
 - Optional names file to remove known applicant or guardian names.
 - Custom regex patterns for program-specific PII.
 - Works on a file or an entire directory (with extension filters).

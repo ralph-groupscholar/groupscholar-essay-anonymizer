@@ -174,6 +174,9 @@ func buildPatterns(custom []string) ([]pattern, error) {
 		{label: "ssn", re: regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`)},
 		{label: "dob", re: regexp.MustCompile(`\b(?:0?[1-9]|1[0-2])[/-](?:0?[1-9]|[12]\d|3[01])[/-](?:19|20)\d{2}\b`)},
 		{label: "street_address", re: regexp.MustCompile(`\b\d+\s+[A-Za-z0-9.\-\s]+\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct)\b`)},
+		{label: "url", re: regexp.MustCompile(`\bhttps?://[^\s]+`)},
+		{label: "ip_address", re: regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)},
+		{label: "credit_card", re: regexp.MustCompile(`\b(?:\d[ -]*?){13,19}\b`)},
 	}
 
 	for _, raw := range custom {
@@ -264,10 +267,23 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask str
 	for _, pat := range patterns {
 		if maskTemplate != "" {
 			counter := 0
-			content = pat.re.ReplaceAllStringFunc(content, func(_ string) string {
+			content = pat.re.ReplaceAllStringFunc(content, func(match string) string {
+				if pat.label == "credit_card" && !luhnValidToken(match) {
+					return match
+				}
 				counter++
 				redactions[pat.label]++
 				return applyMaskTemplate(maskTemplate, pat.label, counter)
+			})
+			continue
+		}
+		if pat.label == "credit_card" {
+			content = pat.re.ReplaceAllStringFunc(content, func(match string) string {
+				if !luhnValidToken(match) {
+					return match
+				}
+				redactions[pat.label]++
+				return mask
 			})
 			continue
 		}
@@ -310,6 +326,36 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask str
 func applyMaskTemplate(template, label string, index int) string {
 	out := strings.ReplaceAll(template, "{label}", label)
 	return strings.ReplaceAll(out, "{n}", fmt.Sprintf("%d", index))
+}
+
+func luhnValidToken(raw string) bool {
+	digits := strings.ReplaceAll(raw, " ", "")
+	digits = strings.ReplaceAll(digits, "-", "")
+	return luhnValid(digits)
+}
+
+func luhnValid(number string) bool {
+	if len(number) < 13 || len(number) > 19 {
+		return false
+	}
+	sum := 0
+	double := false
+	for i := len(number) - 1; i >= 0; i-- {
+		ch := number[i]
+		if ch < '0' || ch > '9' {
+			return false
+		}
+		digit := int(ch - '0')
+		if double {
+			digit *= 2
+			if digit > 9 {
+				digit -= 9
+			}
+		}
+		sum += digit
+		double = !double
+	}
+	return sum%10 == 0
 }
 
 func writeReport(path string, rep report) error {

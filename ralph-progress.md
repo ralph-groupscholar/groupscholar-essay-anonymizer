@@ -8,4 +8,9 @@
 ## 2026-02-08
 - Added optional CSV reporting with per-file and per-pattern counts.
 - Updated documentation with CSV report usage and output details.
+
+## 2026-02-08
+- Added URL, IP address, and credit card detection (Luhn-validated).
+- Added credit card validation to mask templates and standard masking.
+- Updated README to reflect the expanded default redaction set.
 - Added mask template support for labeled redactions with sequential IDs.
