@@ -60,8 +60,13 @@ func main() {
 	namesFile := flag.String("names-file", "", "Optional file with names to redact (one per line)")
 	reportPath := flag.String("report", "", "Optional path for JSON report (default: <output>/redaction-report.json)")
 	reportCSVPath := flag.String("report-csv", "", "Optional path for CSV report")
+	dryRun := flag.Bool("dry-run", false, "Preview redactions without writing files")
 	var customRegex stringList
 	flag.Var(&customRegex, "custom-regex", "Custom regex to redact (repeatable)")
+	var excludeDirs stringList
+	var excludePaths stringList
+	flag.Var(&excludeDirs, "exclude-dir", "Directory name to skip (repeatable)")
+	flag.Var(&excludePaths, "exclude-path", "Relative path to skip (repeatable)")
 	flag.Parse()
 
 	if strings.TrimSpace(*inputPath) == "" {
@@ -79,15 +84,22 @@ func main() {
 	}
 
 	outDir := strings.TrimSpace(*outputPath)
-	if outDir == "" {
-		outDir = filepath.Join(".", "redacted")
-	}
-	outDir, err = filepath.Abs(outDir)
-	if err != nil {
-		exitWith("failed to resolve output path: " + err.Error())
-	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		exitWith("failed to create output directory: " + err.Error())
+	if !*dryRun {
+		if outDir == "" {
+			outDir = filepath.Join(".", "redacted")
+		}
+		outDir, err = filepath.Abs(outDir)
+		if err != nil {
+			exitWith("failed to resolve output path: " + err.Error())
+		}
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			exitWith("failed to create output directory: " + err.Error())
+		}
+	} else if outDir != "" {
+		outDir, err = filepath.Abs(outDir)
+		if err != nil {
+			exitWith("failed to resolve output path: " + err.Error())
+		}
 	}
 
 	patterns, err := buildPatterns(customRegex)
@@ -110,7 +122,7 @@ func main() {
 	allowedExt := parseExtensions(*extensions)
 	var files []string
 	if info.IsDir() {
-		files, err = collectFiles(absInput, allowedExt)
+		files, err = collectFiles(absInput, allowedExt, buildExcludeDirs(excludeDirs), buildExcludePaths(excludePaths))
 		if err != nil {
 			exitWith("failed to collect files: " + err.Error())
 		}
@@ -122,15 +134,21 @@ func main() {
 		exitWith("no files to process")
 	}
 
+	outputLabel := outDir
+	if *dryRun {
+		if outputLabel == "" {
+			outputLabel = "(dry-run)"
+		}
+	}
 	rep := report{
 		GeneratedAt: time.Now().Format(time.RFC3339),
 		InputPath:   absInput,
-		OutputPath:  outDir,
+		OutputPath:  outputLabel,
 		ByPattern:   map[string]int{},
 	}
 
 	for _, path := range files {
-		entry, err := redactFile(path, absInput, outDir, patterns, *mask, *maskTemplate)
+		entry, err := redactFile(path, absInput, outDir, patterns, *mask, *maskTemplate, *dryRun)
 		if err != nil {
 			exitWith(fmt.Sprintf("failed to redact %s: %v", path, err))
 		}
@@ -147,7 +165,11 @@ func main() {
 	})
 
 	if *reportPath == "" {
-		*reportPath = filepath.Join(outDir, "redaction-report.json")
+		if *dryRun {
+			*reportPath = filepath.Join(".", "redaction-report.json")
+		} else {
+			*reportPath = filepath.Join(outDir, "redaction-report.json")
+		}
 	}
 	if err := writeReport(*reportPath, rep); err != nil {
 		exitWith("failed to write report: " + err.Error())
@@ -233,13 +255,57 @@ func parseExtensions(raw string) map[string]bool {
 	return result
 }
 
-func collectFiles(root string, allowedExt map[string]bool) ([]string, error) {
+func buildExcludeDirs(values []string) map[string]bool {
+	result := map[string]bool{}
+	for _, raw := range values {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		result[filepath.Base(trimmed)] = true
+	}
+	return result
+}
+
+func buildExcludePaths(values []string) map[string]bool {
+	result := map[string]bool{}
+	for _, raw := range values {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		cleaned := filepath.Clean(trimmed)
+		cleaned = strings.TrimPrefix(cleaned, string(os.PathSeparator))
+		if cleaned == "." {
+			continue
+		}
+		result[cleaned] = true
+	}
+	return result
+}
+
+func collectFiles(root string, allowedExt map[string]bool, excludeDirs map[string]bool, excludePaths map[string]bool) ([]string, error) {
 	var files []string
+	root = filepath.Clean(root)
 	walk := func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
+		if path != root {
+			if rel, err := filepath.Rel(root, path); err == nil {
+				rel = filepath.Clean(rel)
+				if excludePaths[rel] {
+					if d.IsDir() {
+						return fs.SkipDir
+					}
+					return nil
+				}
+			}
+		}
 		if d.IsDir() {
+			if excludeDirs[d.Name()] {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(d.Name()))
@@ -255,7 +321,7 @@ func collectFiles(root string, allowedExt map[string]bool) ([]string, error) {
 	return files, nil
 }
 
-func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask string, maskTemplate string) (fileReport, error) {
+func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask string, maskTemplate string, dryRun bool) (fileReport, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fileReport{}, err
@@ -302,12 +368,17 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask str
 		}
 	}
 
-	target := filepath.Join(outputRoot, rel)
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return fileReport{}, err
+	target := ""
+	if outputRoot != "" {
+		target = filepath.Join(outputRoot, rel)
 	}
-	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
-		return fileReport{}, err
+	if !dryRun {
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fileReport{}, err
+		}
+		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+			return fileReport{}, err
+		}
 	}
 
 	total := 0
