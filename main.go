@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +17,8 @@ import (
 	"strings"
 	"time"
 )
+
+import _ "github.com/jackc/pgx/v5/stdlib"
 
 type stringList []string
 
@@ -60,6 +65,7 @@ func main() {
 	namesFile := flag.String("names-file", "", "Optional file with names to redact (one per line)")
 	reportPath := flag.String("report", "", "Optional path for JSON report (default: <output>/redaction-report.json)")
 	reportCSVPath := flag.String("report-csv", "", "Optional path for CSV report")
+	dbLog := flag.Bool("db-log", false, "Log run summary to PostgreSQL (requires GS_PG_* env vars)")
 	dryRun := flag.Bool("dry-run", false, "Preview redactions without writing files")
 	var customRegex stringList
 	flag.Var(&customRegex, "custom-regex", "Custom regex to redact (repeatable)")
@@ -178,6 +184,12 @@ func main() {
 	if *reportCSVPath != "" {
 		if err := writeCSVReport(*reportCSVPath, rep); err != nil {
 			exitWith("failed to write CSV report: " + err.Error())
+		}
+	}
+
+	if *dbLog {
+		if err := logRun(rep, *reportPath, *reportCSVPath, *dryRun); err != nil {
+			exitWith("failed to log to database: " + err.Error())
 		}
 	}
 
@@ -487,4 +499,114 @@ func printSummary(rep report, reportPath string) {
 		fmt.Printf("  %s: %d\n", label, rep.ByPattern[label])
 	}
 	fmt.Printf("Report: %s\n", reportPath)
+}
+
+type dbConfig struct {
+	dsn string
+}
+
+func loadDBConfig() (dbConfig, error) {
+	if dsn := strings.TrimSpace(os.Getenv("GS_PG_DSN")); dsn != "" {
+		return dbConfig{dsn: dsn}, nil
+	}
+
+	host := strings.TrimSpace(os.Getenv("GS_PG_HOST"))
+	user := strings.TrimSpace(os.Getenv("GS_PG_USER"))
+	password := os.Getenv("GS_PG_PASSWORD")
+	port := strings.TrimSpace(os.Getenv("GS_PG_PORT"))
+	database := strings.TrimSpace(os.Getenv("GS_PG_DB"))
+	sslmode := strings.TrimSpace(os.Getenv("GS_PG_SSLMODE"))
+
+	if host == "" || user == "" || password == "" {
+		return dbConfig{}, errors.New("missing GS_PG_HOST, GS_PG_USER, or GS_PG_PASSWORD")
+	}
+	if port == "" {
+		port = "5432"
+	}
+	if database == "" {
+		database = "postgres"
+	}
+	if sslmode == "" {
+		sslmode = "disable"
+	}
+
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(user, password),
+		Host:   fmt.Sprintf("%s:%s", host, port),
+		Path:   database,
+	}
+	query := url.Values{}
+	query.Set("sslmode", sslmode)
+	u.RawQuery = query.Encode()
+	return dbConfig{dsn: u.String()}, nil
+}
+
+func logRun(rep report, reportPath, reportCSVPath string, dryRun bool) error {
+	cfg, err := loadDBConfig()
+	if err != nil {
+		return err
+	}
+
+	db, err := sql.Open("pgx", cfg.dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := db.PingContext(ctx); err != nil {
+		return err
+	}
+
+	if _, err := db.ExecContext(ctx, `
+		CREATE SCHEMA IF NOT EXISTS groupscholar_essay_anonymizer;
+		CREATE TABLE IF NOT EXISTS groupscholar_essay_anonymizer.run_log (
+			id BIGSERIAL PRIMARY KEY,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			generated_at TIMESTAMPTZ,
+			input_path TEXT NOT NULL,
+			output_path TEXT NOT NULL,
+			dry_run BOOLEAN NOT NULL,
+			file_count INTEGER NOT NULL,
+			total_redactions INTEGER NOT NULL,
+			by_pattern JSONB NOT NULL,
+			report_path TEXT NOT NULL,
+			report_csv_path TEXT
+		);
+	`); err != nil {
+		return err
+	}
+
+	byPattern, err := json.Marshal(rep.ByPattern)
+	if err != nil {
+		return err
+	}
+
+	generatedAt, err := time.Parse(time.RFC3339, rep.GeneratedAt)
+	if err != nil {
+		generatedAt = time.Now()
+	}
+
+	csvPath := sql.NullString{Valid: false}
+	if strings.TrimSpace(reportCSVPath) != "" {
+		csvPath = sql.NullString{String: reportCSVPath, Valid: true}
+	}
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO groupscholar_essay_anonymizer.run_log (
+			generated_at,
+			input_path,
+			output_path,
+			dry_run,
+			file_count,
+			total_redactions,
+			by_pattern,
+			report_path,
+			report_csv_path
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9);
+	`, generatedAt, rep.InputPath, rep.OutputPath, dryRun, rep.Files, rep.Total, byPattern, reportPath, csvPath)
+	return err
 }

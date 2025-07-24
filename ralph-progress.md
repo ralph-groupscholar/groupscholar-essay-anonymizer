@@ -19,3 +19,8 @@
 - Added dry-run support plus directory and path exclusions for safer batch scans.
 - Added Go tests covering redaction helpers, exclusions, and dry-run behavior.
 - Updated README with new flags and examples.
+
+## 2026-02-08
+- Added optional PostgreSQL run logging with schema auto-creation and env-based DSN config.
+- Added seed data to production database for run_log and documented DB logging usage.
+- Added tests for DB configuration assembly and updated dependencies.

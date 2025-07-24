@@ -10,6 +10,7 @@ Local-first CLI that redacts PII in scholarship essays and intake narratives bef
 - Exclude directories or specific relative paths during directory scans.
 - Dry-run mode to preview redactions without writing files.
 - Generates a JSON report with per-file and per-pattern counts.
+- Optional PostgreSQL logging for run summaries.
 
 ## Usage
 
@@ -41,6 +42,11 @@ go run . -input /path/to/essays -exclude-dir node_modules -exclude-path drafts/e
 go run . -input /path/to/essays -dry-run
 ```
 
+```bash
+GS_PG_HOST=... GS_PG_PORT=... GS_PG_USER=... GS_PG_PASSWORD=... GS_PG_DB=... \
+  go run . -input /path/to/essays -db-log
+```
+
 ## Flags
 - `-input`: File or directory to redact (required).
 - `-output`: Output directory for redacted files (default: `./redacted`).
@@ -54,6 +60,7 @@ go run . -input /path/to/essays -dry-run
 - `-dry-run`: Preview redactions without writing files.
 - `-report`: Optional path for the JSON report.
 - `-report-csv`: Optional path for a CSV report.
+- `-db-log`: Write a run summary to PostgreSQL.
 
 ## Output
 - Redacted files are written to the output directory, preserving relative paths.
@@ -61,5 +68,13 @@ go run . -input /path/to/essays -dry-run
 - JSON report includes per-file counts and totals.
 - CSV report includes per-file counts, totals, and per-pattern columns.
 
+## Database Logging
+Set `-db-log` to store a run summary in `groupscholar_essay_anonymizer.run_log`.
+
+Supported environment variables:
+- `GS_PG_DSN`: Full DSN (overrides the fields below).
+- `GS_PG_HOST`, `GS_PG_PORT`, `GS_PG_USER`, `GS_PG_PASSWORD`, `GS_PG_DB`, `GS_PG_SSLMODE`.
+`GS_PG_SSLMODE` defaults to `disable` if omitted.
+
 ## Tech
-- Go 1.22
+- Go 1.24

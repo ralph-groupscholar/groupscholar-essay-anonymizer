@@ -112,3 +112,32 @@ func mustMkdir(t *testing.T, path string) {
 		t.Fatalf("mkdir error: %v", err)
 	}
 }
+
+func TestLoadDBConfigFromDSN(t *testing.T) {
+	t.Setenv("GS_PG_DSN", "postgres://user:pass@example.com:5432/dbname?sslmode=require")
+	cfg, err := loadDBConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.dsn != "postgres://user:pass@example.com:5432/dbname?sslmode=require" {
+		t.Fatalf("unexpected dsn: %s", cfg.dsn)
+	}
+}
+
+func TestLoadDBConfigFromParts(t *testing.T) {
+	t.Setenv("GS_PG_HOST", "db.example.com")
+	t.Setenv("GS_PG_PORT", "5439")
+	t.Setenv("GS_PG_USER", "appuser")
+	t.Setenv("GS_PG_PASSWORD", "secret")
+	t.Setenv("GS_PG_DB", "essay")
+	t.Setenv("GS_PG_SSLMODE", "require")
+
+	cfg, err := loadDBConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected := "postgres://appuser:secret@db.example.com:5439/essay?sslmode=require"
+	if cfg.dsn != expected {
+		t.Fatalf("unexpected dsn: %s", cfg.dsn)
+	}
+}
