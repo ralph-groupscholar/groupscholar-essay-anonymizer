@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"crypto/sha256"
+	"encoding/hex"
 	"sort"
 	"strings"
 	"time"
@@ -56,12 +58,23 @@ type report struct {
 	Details     []fileReport   `json:"details"`
 }
 
+type maskConfig struct {
+	mask       string
+	template   string
+	hashSalt   string
+	hashLength int
+	useHash    bool
+}
+
 func main() {
 	inputPath := flag.String("input", "", "File or directory to redact")
 	outputPath := flag.String("output", "", "Output directory for redacted files (default: ./redacted)")
 	extensions := flag.String("extensions", ".txt,.md,.csv", "Comma-separated list of file extensions to include when input is a directory")
 	mask := flag.String("mask", "[REDACTED]", "Text to replace redactions with")
 	maskTemplate := flag.String("mask-template", "", "Template for redactions using {label} and {n} placeholders")
+	hashRedactions := flag.Bool("hash", false, "Use hashed redaction tokens in the mask output")
+	hashSalt := flag.String("hash-salt", "", "Optional salt for hashed redaction tokens")
+	hashLength := flag.Int("hash-length", 8, "Length of hash fragment to include in masked output")
 	namesFile := flag.String("names-file", "", "Optional file with names to redact (one per line)")
 	reportPath := flag.String("report", "", "Optional path for JSON report (default: <output>/redaction-report.json)")
 	reportCSVPath := flag.String("report-csv", "", "Optional path for CSV report")
@@ -69,6 +82,8 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "Preview redactions without writing files")
 	var customRegex stringList
 	flag.Var(&customRegex, "custom-regex", "Custom regex to redact (repeatable)")
+	var disablePatterns stringList
+	flag.Var(&disablePatterns, "disable-pattern", "Pattern label to disable (repeatable, supports '*' suffix)")
 	var excludeDirs stringList
 	var excludePaths stringList
 	flag.Var(&excludeDirs, "exclude-dir", "Directory name to skip (repeatable)")
@@ -121,8 +136,17 @@ func main() {
 		patterns = append(patterns, buildNamePatterns(names)...)
 	}
 
+	if len(disablePatterns) > 0 {
+		patterns = filterPatterns(patterns, disablePatterns)
+	}
+
 	if len(patterns) == 0 {
 		exitWith("no patterns configured")
+	}
+
+	maskCfg, err := buildMaskConfig(*mask, *maskTemplate, *hashRedactions, *hashSalt, *hashLength)
+	if err != nil {
+		exitWith(err.Error())
 	}
 
 	allowedExt := parseExtensions(*extensions)
@@ -154,7 +178,7 @@ func main() {
 	}
 
 	for _, path := range files {
-		entry, err := redactFile(path, absInput, outDir, patterns, *mask, *maskTemplate, *dryRun)
+		entry, err := redactFile(path, absInput, outDir, patterns, maskCfg, *dryRun)
 		if err != nil {
 			exitWith(fmt.Sprintf("failed to redact %s: %v", path, err))
 		}
@@ -252,6 +276,57 @@ func buildNamePatterns(names []string) []pattern {
 	return patterns
 }
 
+type disableMatcher struct {
+	exact    map[string]bool
+	prefixes []string
+}
+
+func buildDisableMatcher(values []string) disableMatcher {
+	m := disableMatcher{exact: map[string]bool{}}
+	for _, raw := range values {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasSuffix(trimmed, "*") {
+			prefix := strings.TrimSuffix(trimmed, "*")
+			if prefix != "" {
+				m.prefixes = append(m.prefixes, prefix)
+			}
+			continue
+		}
+		m.exact[trimmed] = true
+	}
+	return m
+}
+
+func (m disableMatcher) matches(label string) bool {
+	if m.exact[label] {
+		return true
+	}
+	for _, prefix := range m.prefixes {
+		if strings.HasPrefix(label, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func filterPatterns(patterns []pattern, disabled []string) []pattern {
+	matcher := buildDisableMatcher(disabled)
+	if len(matcher.exact) == 0 && len(matcher.prefixes) == 0 {
+		return patterns
+	}
+	var filtered []pattern
+	for _, pat := range patterns {
+		if matcher.matches(pat.label) {
+			continue
+		}
+		filtered = append(filtered, pat)
+	}
+	return filtered
+}
+
 func parseExtensions(raw string) map[string]bool {
 	result := map[string]bool{}
 	for _, part := range strings.Split(raw, ",") {
@@ -333,7 +408,7 @@ func collectFiles(root string, allowedExt map[string]bool, excludeDirs map[strin
 	return files, nil
 }
 
-func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask string, maskTemplate string, dryRun bool) (fileReport, error) {
+func redactFile(path, inputRoot, outputRoot string, patterns []pattern, maskCfg maskConfig, dryRun bool) (fileReport, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fileReport{}, err
@@ -341,7 +416,7 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask str
 
 	content := string(data)
 	redactions := map[string]int{}
-	maskTemplate = strings.TrimSpace(maskTemplate)
+	maskTemplate := strings.TrimSpace(maskCfg.template)
 	for _, pat := range patterns {
 		if maskTemplate != "" {
 			counter := 0
@@ -349,9 +424,13 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask str
 				if pat.label == "credit_card" && !luhnValidToken(match) {
 					return match
 				}
+				hash := ""
+				if maskCfg.useHash || strings.Contains(maskTemplate, "{hash}") {
+					hash = hashMatch(match, maskCfg.hashSalt, maskCfg.hashLength)
+				}
 				counter++
 				redactions[pat.label]++
-				return applyMaskTemplate(maskTemplate, pat.label, counter)
+				return applyMaskTemplate(maskTemplate, pat.label, counter, hash)
 			})
 			continue
 		}
@@ -361,7 +440,7 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask str
 					return match
 				}
 				redactions[pat.label]++
-				return mask
+				return maskCfg.mask
 			})
 			continue
 		}
@@ -370,7 +449,7 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask str
 			continue
 		}
 		redactions[pat.label] += len(matches)
-		content = pat.re.ReplaceAllString(content, mask)
+		content = pat.re.ReplaceAllString(content, maskCfg.mask)
 	}
 
 	rel := path
@@ -406,9 +485,10 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, mask str
 	}, nil
 }
 
-func applyMaskTemplate(template, label string, index int) string {
+func applyMaskTemplate(template, label string, index int, hash string) string {
 	out := strings.ReplaceAll(template, "{label}", label)
-	return strings.ReplaceAll(out, "{n}", fmt.Sprintf("%d", index))
+	out = strings.ReplaceAll(out, "{n}", fmt.Sprintf("%d", index))
+	return strings.ReplaceAll(out, "{hash}", hash)
 }
 
 func luhnValidToken(raw string) bool {
@@ -439,6 +519,35 @@ func luhnValid(number string) bool {
 		double = !double
 	}
 	return sum%10 == 0
+}
+
+func buildMaskConfig(mask, template string, hashEnabled bool, salt string, hashLength int) (maskConfig, error) {
+	template = strings.TrimSpace(template)
+	if hashLength <= 0 || hashLength > 64 {
+		return maskConfig{}, errors.New("hash-length must be between 1 and 64")
+	}
+	if hashEnabled && template != "" && !strings.Contains(template, "{hash}") {
+		return maskConfig{}, errors.New("mask-template must include {hash} when --hash is enabled")
+	}
+	if hashEnabled && template == "" {
+		template = "[REDACTED:{label}:{hash}]"
+	}
+	return maskConfig{
+		mask:       mask,
+		template:   template,
+		hashSalt:   salt,
+		hashLength: hashLength,
+		useHash:    hashEnabled,
+	}, nil
+}
+
+func hashMatch(value, salt string, length int) string {
+	sum := sha256.Sum256([]byte(salt + value))
+	encoded := hex.EncodeToString(sum[:])
+	if length > len(encoded) {
+		length = len(encoded)
+	}
+	return encoded[:length]
 }
 
 func writeReport(path string, rep report) error {

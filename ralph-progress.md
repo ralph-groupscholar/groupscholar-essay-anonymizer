@@ -24,3 +24,7 @@
 - Added optional PostgreSQL run logging with schema auto-creation and env-based DSN config.
 - Added seed data to production database for run_log and documented DB logging usage.
 - Added tests for DB configuration assembly and updated dependencies.
+
+## 2026-02-08
+- Added disable-pattern flag with exact and prefix matching to skip specific redaction patterns.
+- Added tests for pattern filtering and updated README with usage/flag details.

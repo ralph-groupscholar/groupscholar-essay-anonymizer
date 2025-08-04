@@ -41,6 +41,21 @@ func TestParseExtensions(t *testing.T) {
 	}
 }
 
+func TestFilterPatterns(t *testing.T) {
+	patterns := []pattern{
+		{label: "email"},
+		{label: "name:Jordan"},
+		{label: "custom:\\b\\d+\\b"},
+	}
+	filtered := filterPatterns(patterns, []string{"email", "name:*"})
+	if len(filtered) != 1 {
+		t.Fatalf("unexpected filtered patterns length: %d", len(filtered))
+	}
+	if filtered[0].label != "custom:\\b\\d+\\b" {
+		t.Fatalf("unexpected remaining pattern: %s", filtered[0].label)
+	}
+}
+
 func TestCollectFilesWithExclusions(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "keep.txt"), "a")

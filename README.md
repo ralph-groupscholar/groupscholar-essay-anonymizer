@@ -27,6 +27,10 @@ go run . -input /path/to/essays -custom-regex "\\b\d{6}\\b" -custom-regex "Stude
 ```
 
 ```bash
+go run . -input /path/to/essays -disable-pattern name:* -disable-pattern phone
+```
+
+```bash
 go run . -input /path/to/essays -report-csv /path/to/redaction-report.csv
 ```
 
@@ -55,6 +59,7 @@ GS_PG_HOST=... GS_PG_PORT=... GS_PG_USER=... GS_PG_PASSWORD=... GS_PG_DB=... \
 - `-mask-template`: Template for redactions using `{label}` and `{n}` placeholders.
 - `-names-file`: File containing names to redact (one per line).
 - `-custom-regex`: Repeatable custom regex patterns.
+- `-disable-pattern`: Repeatable pattern label to disable (`*` suffix for prefix match).
 - `-exclude-dir`: Repeatable directory name to skip when walking a directory.
 - `-exclude-path`: Repeatable relative path to skip when walking a directory.
 - `-dry-run`: Preview redactions without writing files.
