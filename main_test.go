@@ -4,12 +4,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strings"
 	"testing"
 )
 
 func TestApplyMaskTemplate(t *testing.T) {
-	got := applyMaskTemplate("[REDACTED:{label}:{n}]", "email", 3)
-	if got != "[REDACTED:email:3]" {
+	got := applyMaskTemplate("[REDACTED:{label}:{n}:{hash}]", "email", 3, "abc123")
+	if got != "[REDACTED:email:3:abc123]" {
 		t.Fatalf("unexpected mask template: %s", got)
 	}
 }
@@ -100,7 +102,12 @@ func TestRedactFileDryRun(t *testing.T) {
 		t.Fatalf("buildPatterns error: %v", err)
 	}
 
-	entry, err := redactFile(input, root, outputRoot, patterns, "[REDACTED]", "", true)
+	cfg, err := buildMaskConfig("[REDACTED]", "", false, "", 8)
+	if err != nil {
+		t.Fatalf("mask config error: %v", err)
+	}
+
+	entry, redacted, err := redactFile(input, root, outputRoot, patterns, cfg, true)
 	if err != nil {
 		t.Fatalf("redactFile error: %v", err)
 	}
@@ -108,9 +115,86 @@ func TestRedactFileDryRun(t *testing.T) {
 	if entry.Total == 0 {
 		t.Fatalf("expected redactions in dry-run")
 	}
+	if !strings.Contains(redacted, "[REDACTED]") {
+		t.Fatalf("expected redacted content")
+	}
 
 	if _, err := os.Stat(filepath.Join(outputRoot, "essay.txt")); !os.IsNotExist(err) {
 		t.Fatalf("expected no output file during dry-run")
+	}
+}
+
+func TestBuildMaskConfigHashTemplate(t *testing.T) {
+	_, err := buildMaskConfig("[REDACTED]", "[REDACTED:{label}:{n}]", true, "salt", 8)
+	if err == nil {
+		t.Fatalf("expected error when hash enabled without {hash}")
+	}
+
+	cfg, err := buildMaskConfig("[REDACTED]", "", true, "salt", 8)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.template == "" || !strings.Contains(cfg.template, "{hash}") {
+		t.Fatalf("expected default template with hash, got %q", cfg.template)
+	}
+}
+
+func TestRedactFileWithHash(t *testing.T) {
+	root := t.TempDir()
+	input := filepath.Join(root, "essay.txt")
+	content := "Email me at test@example.com or test@example.com"
+	mustWrite(t, input, content)
+
+	patterns, err := buildPatterns(nil)
+	if err != nil {
+		t.Fatalf("buildPatterns error: %v", err)
+	}
+
+	cfg, err := buildMaskConfig("[REDACTED]", "[REDACTED:{label}:{hash}]", true, "salt", 8)
+	if err != nil {
+		t.Fatalf("mask config error: %v", err)
+	}
+
+	outputRoot := filepath.Join(root, "out")
+	_, _, err = redactFile(input, root, outputRoot, patterns, cfg, false)
+	if err != nil {
+		t.Fatalf("redactFile error: %v", err)
+	}
+
+	redacted, err := os.ReadFile(filepath.Join(outputRoot, "essay.txt"))
+	if err != nil {
+		t.Fatalf("read redacted error: %v", err)
+	}
+	result := string(redacted)
+	re := regexp.MustCompile(`\[REDACTED:email:([0-9a-f]{8})\]`)
+	matches := re.FindAllStringSubmatch(result, -1)
+	if len(matches) != 2 {
+		t.Fatalf("expected two hashed redactions, got %d (%s)", len(matches), result)
+	}
+	if matches[0][1] != matches[1][1] {
+		t.Fatalf("expected deterministic hashes for same value")
+	}
+}
+
+func TestRedactContentSkipsInvalidCard(t *testing.T) {
+	patterns, err := buildPatterns(nil)
+	if err != nil {
+		t.Fatalf("buildPatterns error: %v", err)
+	}
+	cfg, err := buildMaskConfig("[REDACTED]", "", false, "", 8)
+	if err != nil {
+		t.Fatalf("mask config error: %v", err)
+	}
+	content := "valid 4111 1111 1111 1111 invalid 4111 1111 1111 1112"
+	redacted, counts := redactContent(content, patterns, cfg)
+	if strings.Contains(redacted, "4111 1111 1111 1111") {
+		t.Fatalf("expected valid card to be redacted")
+	}
+	if !strings.Contains(redacted, "4111 1111 1111 1112") {
+		t.Fatalf("expected invalid card to remain")
+	}
+	if counts["credit_card"] != 1 {
+		t.Fatalf("expected 1 credit_card redaction, got %d", counts["credit_card"])
 	}
 }
 

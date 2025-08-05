@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,8 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"crypto/sha256"
-	"encoding/hex"
 	"sort"
 	"strings"
 	"time"
@@ -71,7 +71,7 @@ func main() {
 	outputPath := flag.String("output", "", "Output directory for redacted files (default: ./redacted)")
 	extensions := flag.String("extensions", ".txt,.md,.csv", "Comma-separated list of file extensions to include when input is a directory")
 	mask := flag.String("mask", "[REDACTED]", "Text to replace redactions with")
-	maskTemplate := flag.String("mask-template", "", "Template for redactions using {label} and {n} placeholders")
+	maskTemplate := flag.String("mask-template", "", "Template for redactions using {label}, {n}, and {hash} placeholders")
 	hashRedactions := flag.Bool("hash", false, "Use hashed redaction tokens in the mask output")
 	hashSalt := flag.String("hash-salt", "", "Optional salt for hashed redaction tokens")
 	hashLength := flag.Int("hash-length", 8, "Length of hash fragment to include in masked output")
@@ -80,6 +80,7 @@ func main() {
 	reportCSVPath := flag.String("report-csv", "", "Optional path for CSV report")
 	dbLog := flag.Bool("db-log", false, "Log run summary to PostgreSQL (requires GS_PG_* env vars)")
 	dryRun := flag.Bool("dry-run", false, "Preview redactions without writing files")
+	stdout := flag.Bool("stdout", false, "Print redacted output to stdout (single-file only)")
 	var customRegex stringList
 	flag.Var(&customRegex, "custom-regex", "Custom regex to redact (repeatable)")
 	var disablePatterns stringList
@@ -105,6 +106,13 @@ func main() {
 	}
 
 	outDir := strings.TrimSpace(*outputPath)
+	if *stdout && info.IsDir() {
+		exitWith("-stdout requires a single file input")
+	}
+	if *stdout {
+		*dryRun = true
+		outDir = ""
+	}
 	if !*dryRun {
 		if outDir == "" {
 			outDir = filepath.Join(".", "redacted")
@@ -165,7 +173,9 @@ func main() {
 	}
 
 	outputLabel := outDir
-	if *dryRun {
+	if *stdout {
+		outputLabel = "(stdout)"
+	} else if *dryRun {
 		if outputLabel == "" {
 			outputLabel = "(dry-run)"
 		}
@@ -177,10 +187,14 @@ func main() {
 		ByPattern:   map[string]int{},
 	}
 
+	stdoutContent := ""
 	for _, path := range files {
-		entry, err := redactFile(path, absInput, outDir, patterns, maskCfg, *dryRun)
+		entry, content, err := redactFile(path, absInput, outDir, patterns, maskCfg, *dryRun)
 		if err != nil {
 			exitWith(fmt.Sprintf("failed to redact %s: %v", path, err))
+		}
+		if *stdout {
+			stdoutContent = content
 		}
 		rep.Files++
 		rep.Total += entry.Total
@@ -217,7 +231,10 @@ func main() {
 		}
 	}
 
-	printSummary(rep, *reportPath)
+	if *stdout {
+		fmt.Print(stdoutContent)
+	}
+	printSummary(rep, *reportPath, *stdout)
 }
 
 func exitWith(message string) {
@@ -408,13 +425,7 @@ func collectFiles(root string, allowedExt map[string]bool, excludeDirs map[strin
 	return files, nil
 }
 
-func redactFile(path, inputRoot, outputRoot string, patterns []pattern, maskCfg maskConfig, dryRun bool) (fileReport, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fileReport{}, err
-	}
-
-	content := string(data)
+func redactContent(content string, patterns []pattern, maskCfg maskConfig) (string, map[string]int) {
 	redactions := map[string]int{}
 	maskTemplate := strings.TrimSpace(maskCfg.template)
 	for _, pat := range patterns {
@@ -451,6 +462,17 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, maskCfg 
 		redactions[pat.label] += len(matches)
 		content = pat.re.ReplaceAllString(content, maskCfg.mask)
 	}
+	return content, redactions
+}
+
+func redactFile(path, inputRoot, outputRoot string, patterns []pattern, maskCfg maskConfig, dryRun bool) (fileReport, string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fileReport{}, "", err
+	}
+
+	content := string(data)
+	redacted, redactions := redactContent(content, patterns, maskCfg)
 
 	rel := path
 	if info, err := os.Stat(inputRoot); err == nil && info.IsDir() {
@@ -465,10 +487,10 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, maskCfg 
 	}
 	if !dryRun {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return fileReport{}, err
+			return fileReport{}, "", err
 		}
-		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
-			return fileReport{}, err
+		if err := os.WriteFile(target, []byte(redacted), 0o644); err != nil {
+			return fileReport{}, "", err
 		}
 	}
 
@@ -482,7 +504,7 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, maskCfg 
 		Target:     target,
 		Redactions: redactions,
 		Total:      total,
-	}, nil
+	}, redacted, nil
 }
 
 func applyMaskTemplate(template, label string, index int, hash string) string {
@@ -597,17 +619,21 @@ func writeCSVReport(path string, rep report) error {
 	return writer.Error()
 }
 
-func printSummary(rep report, reportPath string) {
-	fmt.Printf("Redacted %d files. Total redactions: %d\n", rep.Files, rep.Total)
+func printSummary(rep report, reportPath string, toStderr bool) {
+	out := os.Stdout
+	if toStderr {
+		out = os.Stderr
+	}
+	fmt.Fprintf(out, "Redacted %d files. Total redactions: %d\n", rep.Files, rep.Total)
 	labels := make([]string, 0, len(rep.ByPattern))
 	for label := range rep.ByPattern {
 		labels = append(labels, label)
 	}
 	sort.Strings(labels)
 	for _, label := range labels {
-		fmt.Printf("  %s: %d\n", label, rep.ByPattern[label])
+		fmt.Fprintf(out, "  %s: %d\n", label, rep.ByPattern[label])
 	}
-	fmt.Printf("Report: %s\n", reportPath)
+	fmt.Fprintf(out, "Report: %s\n", reportPath)
 }
 
 type dbConfig struct {

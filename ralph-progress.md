@@ -28,3 +28,8 @@
 ## 2026-02-08
 - Added disable-pattern flag with exact and prefix matching to skip specific redaction patterns.
 - Added tests for pattern filtering and updated README with usage/flag details.
+
+## 2026-02-08
+- Added hashed redaction support with configurable salt and hash length, plus template {hash} placeholder.
+- Updated redaction pipeline and tests to cover deterministic hashed tokens.
+- Refreshed README with new hash flags and usage example.

@@ -9,7 +9,9 @@ Local-first CLI that redacts PII in scholarship essays and intake narratives bef
 - Works on a file or an entire directory (with extension filters).
 - Exclude directories or specific relative paths during directory scans.
 - Dry-run mode to preview redactions without writing files.
+- Optional stdout output for single-file redaction.
 - Generates a JSON report with per-file and per-pattern counts.
+- Optional hash-aware masks for deterministic anonymized tokens.
 - Optional PostgreSQL logging for run summaries.
 
 ## Usage
@@ -39,11 +41,19 @@ go run . -input /path/to/essays -mask-template "[REDACTED:{label}:{n}]"
 ```
 
 ```bash
+go run . -input /path/to/essays -hash -hash-salt "gs-essay" -mask-template "[REDACTED:{label}:{hash}]"
+```
+
+```bash
 go run . -input /path/to/essays -exclude-dir node_modules -exclude-path drafts/essay.txt
 ```
 
 ```bash
 go run . -input /path/to/essays -dry-run
+```
+
+```bash
+go run . -input /path/to/essay.txt -stdout
 ```
 
 ```bash
@@ -56,13 +66,17 @@ GS_PG_HOST=... GS_PG_PORT=... GS_PG_USER=... GS_PG_PASSWORD=... GS_PG_DB=... \
 - `-output`: Output directory for redacted files (default: `./redacted`).
 - `-extensions`: Comma-separated extensions when input is a directory.
 - `-mask`: Replacement string for redacted content.
-- `-mask-template`: Template for redactions using `{label}` and `{n}` placeholders.
+- `-mask-template`: Template for redactions using `{label}`, `{n}`, and `{hash}` placeholders.
+- `-hash`: Enable hashed redaction tokens (requires `{hash}` in template or uses default template).
+- `-hash-salt`: Optional salt for hashed tokens.
+- `-hash-length`: Length of the hash fragment included in masked output.
 - `-names-file`: File containing names to redact (one per line).
 - `-custom-regex`: Repeatable custom regex patterns.
 - `-disable-pattern`: Repeatable pattern label to disable (`*` suffix for prefix match).
 - `-exclude-dir`: Repeatable directory name to skip when walking a directory.
 - `-exclude-path`: Repeatable relative path to skip when walking a directory.
 - `-dry-run`: Preview redactions without writing files.
+- `-stdout`: Print redacted output to stdout (single-file only).
 - `-report`: Optional path for the JSON report.
 - `-report-csv`: Optional path for a CSV report.
 - `-db-log`: Write a run summary to PostgreSQL.
@@ -70,6 +84,7 @@ GS_PG_HOST=... GS_PG_PORT=... GS_PG_USER=... GS_PG_PASSWORD=... GS_PG_DB=... \
 ## Output
 - Redacted files are written to the output directory, preserving relative paths.
 - Dry-run mode still writes reports but does not write redacted files.
+- Stdout mode forces dry-run and prints redacted content for piping.
 - JSON report includes per-file counts and totals.
 - CSV report includes per-file counts, totals, and per-pattern columns.
 
