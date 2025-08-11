@@ -26,6 +26,11 @@
 - Added tests for DB configuration assembly and updated dependencies.
 
 ## 2026-02-08
+- Added skip-clean mode to avoid writing files when no redactions are found, with report + CSV tracking.
+- Updated tests and CLI summaries for skip-clean runs.
+- Updated README with skip-clean usage and flag details.
+
+## 2026-02-08
 - Added disable-pattern flag with exact and prefix matching to skip specific redaction patterns.
 - Added tests for pattern filtering and updated README with usage/flag details.
 

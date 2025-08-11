@@ -107,7 +107,7 @@ func TestRedactFileDryRun(t *testing.T) {
 		t.Fatalf("mask config error: %v", err)
 	}
 
-	entry, redacted, err := redactFile(input, root, outputRoot, patterns, cfg, true)
+	entry, redacted, err := redactFile(input, root, outputRoot, patterns, cfg, true, false)
 	if err != nil {
 		t.Fatalf("redactFile error: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestRedactFileWithHash(t *testing.T) {
 	}
 
 	outputRoot := filepath.Join(root, "out")
-	_, _, err = redactFile(input, root, outputRoot, patterns, cfg, false)
+	_, _, err = redactFile(input, root, outputRoot, patterns, cfg, false, false)
 	if err != nil {
 		t.Fatalf("redactFile error: %v", err)
 	}
@@ -195,6 +195,33 @@ func TestRedactContentSkipsInvalidCard(t *testing.T) {
 	}
 	if counts["credit_card"] != 1 {
 		t.Fatalf("expected 1 credit_card redaction, got %d", counts["credit_card"])
+	}
+}
+
+func TestRedactFileSkipClean(t *testing.T) {
+	root := t.TempDir()
+	input := filepath.Join(root, "clean.txt")
+	mustWrite(t, input, "Nothing sensitive here.")
+	outputRoot := filepath.Join(root, "out")
+
+	patterns, err := buildPatterns(nil)
+	if err != nil {
+		t.Fatalf("buildPatterns error: %v", err)
+	}
+	cfg, err := buildMaskConfig("[REDACTED]", "", false, "", 8)
+	if err != nil {
+		t.Fatalf("mask config error: %v", err)
+	}
+
+	entry, _, err := redactFile(input, root, outputRoot, patterns, cfg, false, true)
+	if err != nil {
+		t.Fatalf("redactFile error: %v", err)
+	}
+	if !entry.Skipped {
+		t.Fatalf("expected clean file to be skipped")
+	}
+	if _, err := os.Stat(filepath.Join(outputRoot, "clean.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected no output file when skip-clean is enabled")
 	}
 }
 

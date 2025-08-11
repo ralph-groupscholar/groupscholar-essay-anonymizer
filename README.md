@@ -10,6 +10,7 @@ Local-first CLI that redacts PII in scholarship essays and intake narratives bef
 - Exclude directories or specific relative paths during directory scans.
 - Dry-run mode to preview redactions without writing files.
 - Optional stdout output for single-file redaction.
+- Skip clean files when no redactions are found.
 - Generates a JSON report with per-file and per-pattern counts.
 - Optional hash-aware masks for deterministic anonymized tokens.
 - Optional PostgreSQL logging for run summaries.
@@ -57,6 +58,10 @@ go run . -input /path/to/essay.txt -stdout
 ```
 
 ```bash
+go run . -input /path/to/essays -skip-clean
+```
+
+```bash
 GS_PG_HOST=... GS_PG_PORT=... GS_PG_USER=... GS_PG_PASSWORD=... GS_PG_DB=... \
   go run . -input /path/to/essays -db-log
 ```
@@ -77,6 +82,7 @@ GS_PG_HOST=... GS_PG_PORT=... GS_PG_USER=... GS_PG_PASSWORD=... GS_PG_DB=... \
 - `-exclude-path`: Repeatable relative path to skip when walking a directory.
 - `-dry-run`: Preview redactions without writing files.
 - `-stdout`: Print redacted output to stdout (single-file only).
+- `-skip-clean`: Skip writing output files with zero redactions.
 - `-report`: Optional path for the JSON report.
 - `-report-csv`: Optional path for a CSV report.
 - `-db-log`: Write a run summary to PostgreSQL.
@@ -85,8 +91,9 @@ GS_PG_HOST=... GS_PG_PORT=... GS_PG_USER=... GS_PG_PASSWORD=... GS_PG_DB=... \
 - Redacted files are written to the output directory, preserving relative paths.
 - Dry-run mode still writes reports but does not write redacted files.
 - Stdout mode forces dry-run and prints redacted content for piping.
+- Skip-clean mode avoids writing files when no redactions are found.
 - JSON report includes per-file counts and totals.
-- CSV report includes per-file counts, totals, and per-pattern columns.
+- CSV report includes per-file counts, totals, skipped flag, and per-pattern columns.
 
 ## Database Logging
 Set `-db-log` to store a run summary in `groupscholar_essay_anonymizer.run_log`.

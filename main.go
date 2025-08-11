@@ -46,6 +46,7 @@ type fileReport struct {
 	Target     string         `json:"target"`
 	Redactions map[string]int `json:"redactions"`
 	Total      int            `json:"total"`
+	Skipped    bool           `json:"skipped"`
 }
 
 type report struct {
@@ -81,6 +82,7 @@ func main() {
 	dbLog := flag.Bool("db-log", false, "Log run summary to PostgreSQL (requires GS_PG_* env vars)")
 	dryRun := flag.Bool("dry-run", false, "Preview redactions without writing files")
 	stdout := flag.Bool("stdout", false, "Print redacted output to stdout (single-file only)")
+	skipClean := flag.Bool("skip-clean", false, "Skip writing output files with zero redactions")
 	var customRegex stringList
 	flag.Var(&customRegex, "custom-regex", "Custom regex to redact (repeatable)")
 	var disablePatterns stringList
@@ -189,7 +191,7 @@ func main() {
 
 	stdoutContent := ""
 	for _, path := range files {
-		entry, content, err := redactFile(path, absInput, outDir, patterns, maskCfg, *dryRun)
+		entry, content, err := redactFile(path, absInput, outDir, patterns, maskCfg, *dryRun, *skipClean)
 		if err != nil {
 			exitWith(fmt.Sprintf("failed to redact %s: %v", path, err))
 		}
@@ -465,7 +467,7 @@ func redactContent(content string, patterns []pattern, maskCfg maskConfig) (stri
 	return content, redactions
 }
 
-func redactFile(path, inputRoot, outputRoot string, patterns []pattern, maskCfg maskConfig, dryRun bool) (fileReport, string, error) {
+func redactFile(path, inputRoot, outputRoot string, patterns []pattern, maskCfg maskConfig, dryRun bool, skipClean bool) (fileReport, string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fileReport{}, "", err
@@ -485,18 +487,23 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, maskCfg 
 	if outputRoot != "" {
 		target = filepath.Join(outputRoot, rel)
 	}
-	if !dryRun {
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return fileReport{}, "", err
-		}
-		if err := os.WriteFile(target, []byte(redacted), 0o644); err != nil {
-			return fileReport{}, "", err
-		}
-	}
 
 	total := 0
 	for _, count := range redactions {
 		total += count
+	}
+	skipped := false
+	if !dryRun {
+		if skipClean && total == 0 {
+			skipped = true
+		} else {
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return fileReport{}, "", err
+			}
+			if err := os.WriteFile(target, []byte(redacted), 0o644); err != nil {
+				return fileReport{}, "", err
+			}
+		}
 	}
 
 	return fileReport{
@@ -504,6 +511,7 @@ func redactFile(path, inputRoot, outputRoot string, patterns []pattern, maskCfg 
 		Target:     target,
 		Redactions: redactions,
 		Total:      total,
+		Skipped:    skipped,
 	}, redacted, nil
 }
 
@@ -601,13 +609,13 @@ func writeCSVReport(path string, rep report) error {
 	defer file.Close()
 
 	writer := csv.NewWriter(file)
-	header := append([]string{"source", "target", "total_redactions"}, labels...)
+	header := append([]string{"source", "target", "total_redactions", "skipped"}, labels...)
 	if err := writer.Write(header); err != nil {
 		return err
 	}
 
 	for _, entry := range rep.Details {
-		row := []string{entry.Source, entry.Target, fmt.Sprintf("%d", entry.Total)}
+		row := []string{entry.Source, entry.Target, fmt.Sprintf("%d", entry.Total), fmt.Sprintf("%t", entry.Skipped)}
 		for _, label := range labels {
 			row = append(row, fmt.Sprintf("%d", entry.Redactions[label]))
 		}
@@ -632,6 +640,15 @@ func printSummary(rep report, reportPath string, toStderr bool) {
 	sort.Strings(labels)
 	for _, label := range labels {
 		fmt.Fprintf(out, "  %s: %d\n", label, rep.ByPattern[label])
+	}
+	skipped := 0
+	for _, entry := range rep.Details {
+		if entry.Skipped {
+			skipped++
+		}
+	}
+	if skipped > 0 {
+		fmt.Fprintf(out, "  skipped_clean_files: %d\n", skipped)
 	}
 	fmt.Fprintf(out, "Report: %s\n", reportPath)
 }
